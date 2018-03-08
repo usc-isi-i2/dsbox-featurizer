@@ -1,4 +1,6 @@
 import re
+import numpy as np
+numerics = ['int16', 'int32', 'int64', 'float16', 'float32', 'float64'] # numerics type define, for filtering numeric columns
 
 class Aggregator(object):
     """
@@ -93,14 +95,32 @@ class Aggregator(object):
             if self.verbose > 0: print ("current backward table: {}".format(table_key))
             table_name, column_name = self.get_names(table_key)
             table = self.tables[table_name]
-            r = table.groupby(column_name).count()      # after groupby count(), the index of r will be `column_name` automatically
-            r = r.rename(columns = lambda x : table_name+"_"+x+"_COUNT")
-            
             # join back to central table, need to find the corresponding column name
             central_table_key = self.get_corresponding_column_name(central_table_name, table_key)
             if self.verbose > 0: print("central_table_key is: {}".format(central_table_key)) # name of primary-foreign key 
-            result = result.join(other=r, on=central_table_key) # no need to set_index for r, because its index is alreayd column_name
-            
+
+            # split to numeric, non-numeric parts; make sure have column_name in both
+            table_numeric_keys = [i for i in table.select_dtypes(include=numerics).keys()]
+            if (column_name in table_numeric_keys):
+                table_numeric = table[table_numeric_keys]
+                table_non_numeric = table[ [i for i in table.select_dtypes(exclude=numerics).keys()]+[column_name]]
+            else:
+                table_numeric = table[table_numeric_keys+[column_name]]
+                table_non_numeric = table[ [i for i in table.select_dtypes(exclude=numerics).keys()]]
+
+            # for non numeric, just do COUNT
+            if (len(table_non_numeric.keys()) > 1):
+                r1 = table_non_numeric.groupby(column_name).count()      # after groupby count(), the index of r will be `column_name` automatically
+                r1 = r1.rename(columns = lambda x : table_name+"_"+x+"_COUNT")
+                result = result.join(other=r1, on=central_table_key) # no need to set_index for r, because its index is alreayd column_name
+            # for numeric, do 
+            if (len(table_numeric.keys()) > 1):
+                r2 = table_numeric.groupby(column_name).agg([np.sum, np.mean, np.max, np.min]) # ????COUNT
+                r2.rename(columns={"sum":"_SUM", "mean":"_MEAN", "max":"_MAX", "min":"_MIN", "count":"_SUM"})
+                r2.columns = ['_'.join(tup).rstrip('_') for tup in r2.columns.values] # flatten column names
+                r2 = r2.rename(columns = lambda x : table_name+"_"+x)
+                result = result.join(other=r2, on=central_table_key) # no need to set_index for r, because its index is alreayd column_name
+
         return result
 
     def get_corresponding_column_name(self, table1, table2_col):
